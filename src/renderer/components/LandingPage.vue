@@ -3,20 +3,17 @@
     <el-row>
       <span class="title">
         <el-button @click="openFile">Open</el-button>
+        <el-button @click="scanDir">scanDir</el-button>
       </span>
     </el-row>
     <el-row>
-      <el-col :span="8" v-for="(item, index) in videos" :key="index">
+      <el-col :span="4" v-for="(item, index) in videos" :key="index" style="padding:20px;">
         <el-card :body-style="{ padding: '0px' }">
-          <div style="height:80px;line-height:80px;width:45px;text-align:center;">
-            <img v-if="item.icon" :src="item.icon" class="image">
-            <template v-else>
-              <!-- no icon -->
-            </template>
+          <div style="height:150px;" :id="item._id + '_imgBox'">
           </div>
           <!--  -->
           <div style="padding: 14px;">
-            <span>{{ item.name }}</span>
+            <div style="overflow: hidden;height: 18px;">{{ item.name }}</div>
             <div class="bottom clearfix">
               <time class="time">{{ formatTime(item.add_time) }}</time>
               <el-button type="text" class="button" @click="dialogFormVisible = true;currentEditVideo = Object.assign({},item)">edit</el-button>
@@ -25,7 +22,17 @@
         </el-card>
       </el-col>
     </el-row>
-        <!-- <system-information></system-information> -->
+    <div class="block">
+      <el-pagination
+        @size-change="handleSizeChange"
+        @current-change="handleCurrentChange"
+        :current-page="currentPage"
+        :page-sizes="[10,20,50,100]"
+        :page-size="pageSize"
+        layout="total, sizes, prev, pager, next, jumper"
+        :total="count">
+      </el-pagination>
+    </div>
     <el-dialog title="edit" :visible.sync="dialogFormVisible">
       <el-form :model="currentEditVideo">
         <el-form-item :label="key" :label-width="formLabelWidth" v-for="(key, index) in currentVideoKeys" :key="index">
@@ -48,6 +55,15 @@
 import SystemInformation from "./LandingPage/SystemInformation";
 import { debug } from "util";
 import { defaultCoreCipherList, defaultCipherList } from "constants";
+import { desktopCapturer } from "electron";
+import path from "path";
+const fs = require("fs");
+
+var videoPlayer = document.createElement("video");
+videoPlayer.autoplay = true;
+videoPlayer.className = "videoPreviewEl";
+videoPlayer.loop = true;
+
 // 不允许创建,编辑的key
 // _id 数据库自动创建的唯一id
 // icon 保留的视频封面
@@ -64,7 +80,11 @@ export default {
       dialogFormVisible: false,
       form: {},
       formLabelWidth: "120px",
-      currentEditVideo: {}
+      currentEditVideo: {},
+      icons: {},
+      currentPage: 1,
+      pageSize: 10,
+      count: 0
     };
   },
   computed: {
@@ -88,36 +108,70 @@ export default {
         }
       );
     },
+    isVideo(ext) {
+      let arr = [".mp4", ".avi", ".wmv"];
+      if (arr.indexOf(ext) == -1) return false;
+      return true;
+    },
     addVideo(res) {
       let docArr = [];
+      let that = this;
       res.forEach(fullPath => {
         let name = fullPath.replace(/^.*[\\\/]/, "");
+        let ext = path.parse(name).ext;
+        if (this.isVideo(ext) == false) return;
         let doc = {
           name: name,
+          path: fullPath,
           add_time: new Date()
         };
+
         docArr.push(doc);
       });
-
-      this.$db.videos.insert(docArr, this.updateVideos);
+      docArr.forEach(doc => {
+        // 检查是否有重复
+        let exist = this.$db.videos.count({ path: doc.path }, function(
+          error,
+          count
+        ) {
+          console.log("已经有了" + doc.path + " " + count);
+          if (count == 0) {
+            console.log("插入文件" + doc.path);
+            that.$db.videos.insert(doc, that.updateVideos);
+          }
+        });
+      });
     },
     updateVideos(err, docs) {
       if (err) {
         this.$message.error("error:" + err);
       } else {
-        this.videos = this.videos.concat(docs);
-        console.log(this.videos);
-        this.$message({
-          message: "success",
-          type: "success"
+        docs.forEach(item => {
+          this.getImageAt(item);
         });
+        this.videos = this.videos.concat(docs);
+        this.getImageAt(this.videos[0]);
+
+        // this.$message({
+        //   message: "success",
+        //   type: "success"
+        // });
       }
     },
+    updateCount() {
+      let that = this;
+      this.$db.videos.count({}, function(error, count) {
+        console.log(count);
+        that.count = count;
+      });
+    },
     openVideos() {
+      this.updateCount();
+      this.videos = [];
       this.$db.videos
         .find({})
-        .skip(0)
-        .limit(10)
+        .skip((this.currentPage - 1) * this.pageSize)
+        .limit(this.pageSize)
         .exec(this.updateVideos);
     },
     deleteVideoCallback(err, numRemoved) {
@@ -166,6 +220,89 @@ export default {
         this.updateVideoCallback
       );
     },
+    getVideoImage(path, secs, callback) {
+      var me = this,
+        video = document.createElement("video");
+      video.onloadedmetadata = function() {
+        if ("function" === typeof secs) {
+          secs = secs(this.duration);
+        }
+        this.currentTime = Math.min(
+          Math.max(0, (secs < 0 ? this.duration : 0) + secs),
+          this.duration
+        );
+      };
+      video.onseeked = function(e) {
+        var canvas = document.createElement("canvas");
+        canvas.height = video.videoHeight;
+        canvas.width = video.videoWidth;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        var img = new Image();
+        img.src = canvas.toDataURL();
+        callback.call(me, img, this.currentTime, e);
+      };
+      video.onerror = function(e) {
+        callback.call(me, undefined, undefined, e);
+      };
+      video.src = path;
+    },
+    getImageAt(item) {
+      var secs = 0;
+      var duration;
+      var that = this;
+      this.getVideoImage(
+        item.path,
+        function(totalTime) {
+          duration = totalTime;
+          return secs;
+        },
+        function(img, secs, event) {
+          if (event.type == "seeked") {
+            let box = document.getElementById(item._id + "_imgBox");
+            img.addEventListener("mouseenter", function() {
+              videoPlayer.poster = img.src;
+              videoPlayer.src = item.path;
+              box.appendChild(videoPlayer);
+            });
+            img.addEventListener("mouseleave", function() {
+              // box.removeChild(videoPlayer);
+            });
+            box.appendChild(img);
+            // var li = document.createElement("li");
+            // li.innerHTML += "<b>Frame at second " + secs + ":</b><br />";
+            // li.appendChild(img);
+            // document.getElementById("app").appendChild(li);
+            // if (duration >= ++secs) {
+            //   showImageAt(secs);
+            // }
+          } else if (event.type == "error") {
+            console.log(event);
+          }
+        }
+      );
+    },
+    showImageAt(secs) {
+      var duration;
+      this.getVideoImage(
+        this.currentEditVideo.path,
+        function(totalTime) {
+          duration = totalTime;
+          return secs;
+        },
+        function(img, secs, event) {
+          if (event.type == "seeked") {
+            var li = document.createElement("li");
+            li.innerHTML += "<b>Frame at second " + secs + ":</b><br />";
+            li.appendChild(img);
+            document.getElementById("app").appendChild(li);
+            if (duration >= ++secs) {
+              showImageAt(secs);
+            }
+          }
+        }
+      );
+    },
     formatTime(date) {
       if (typeof date == "string") return date;
       let sp = "/";
@@ -182,8 +319,49 @@ export default {
         date.getMinutes() +
         tsp +
         date.getSeconds();
-      console.log(str);
       return str;
+    },
+    // 扫描指定目录下的所有文件，有新文件就添加，已path为排重
+    scanDir() {
+      let that = this;
+      this.$electron.remote.dialog.showOpenDialog(
+        {
+          properties: ["openDirectory"]
+        },
+        function(res) {
+          if (res) {
+            that.scan(res[0]);
+          }
+        }
+      );
+    },
+    getFiles(dir, files_) {
+      files_ = files_ || [];
+      var files = fs.readdirSync(dir);
+      for (var i in files) {
+        var name = dir + "/" + files[i];
+        if (fs.statSync(name).isDirectory()) {
+          this.getFiles(name, files_);
+        } else {
+          files_.push(name);
+        }
+      }
+      return files_;
+    },
+    scan(myDir) {
+      let list = this.getFiles(myDir);
+      console.log("一共" + list.length + "个文件");
+      this.addVideo(list);
+    },
+    handleSizeChange(val) {
+      console.log(`每页 ${val} 条`);
+      this.pageSize = val;
+      this.openVideos();
+    },
+    handleCurrentChange(val) {
+      console.log(`当前页: ${val}`);
+      this.currentPage = val;
+      this.openVideos();
     }
   },
   created() {
@@ -199,6 +377,9 @@ export default {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+}
+img {
+  height: 100%;
 }
 
 body {
@@ -235,7 +416,15 @@ main > div {
   display: flex;
   flex-direction: column;
 }
-
+.videoPreviewEl {
+  display: inline-block;
+  position: absolute;
+  left: 0;
+  max-height: 100%;
+  top: 0;
+  width: 100%;
+  z-index: 0;
+}
 .welcome {
   color: #555;
   font-size: 23px;
