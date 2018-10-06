@@ -6,32 +6,39 @@
         <el-button @click="scanDir">scanDir</el-button>
       </span>
     </el-row>
-    <el-row>
-      <el-col :span="4" v-for="(item, index) in videos" :key="index" style="padding:20px;">
-        <el-card :body-style="{ padding: '0px' }">
-          <div style="height:150px;" :id="item._id + '_imgBox'">
+    <div>
+      <div>
+        <Tags/>
+      </div>
+      <div>
+          <el-row>
+            <el-col :span="4" v-for="(item, index) in videos" :key="index" style="padding:20px;">
+              <el-card :body-style="{ padding: '0px' }">
+                <div style="height:100px;position: relative;" :id="item._id + '_imgBox'">
+                </div>
+                <!--  -->
+                <div style="padding: 14px;">
+                  <div style="overflow: hidden;height: 18px;">{{ item.name }}</div>
+                  <div class="bottom clearfix">
+                    <time class="time">{{ formatTime(item.add_time) }}</time>
+                    <el-button type="text" class="button" @click="dialogFormVisible = true;currentEditVideo = Object.assign({},item)">edit</el-button>
+                  </div>
+                </div>
+              </el-card>
+            </el-col>
+        </el-row>
+         <div class="block">
+            <el-pagination
+              @size-change="handleSizeChange"
+              @current-change="handleCurrentChange"
+              :current-page="currentPage"
+              :page-sizes="[10,20,50,100]"
+              :page-size="pageSize"
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="count">
+            </el-pagination>
           </div>
-          <!--  -->
-          <div style="padding: 14px;">
-            <div style="overflow: hidden;height: 18px;">{{ item.name }}</div>
-            <div class="bottom clearfix">
-              <time class="time">{{ formatTime(item.add_time) }}</time>
-              <el-button type="text" class="button" @click="dialogFormVisible = true;currentEditVideo = Object.assign({},item)">edit</el-button>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-    <div class="block">
-      <el-pagination
-        @size-change="handleSizeChange"
-        @current-change="handleCurrentChange"
-        :current-page="currentPage"
-        :page-sizes="[10,20,50,100]"
-        :page-size="pageSize"
-        layout="total, sizes, prev, pager, next, jumper"
-        :total="count">
-      </el-pagination>
+      </div>
     </div>
     <el-dialog title="edit" :visible.sync="dialogFormVisible">
       <el-form :model="currentEditVideo">
@@ -52,17 +59,19 @@
 </template>
 
 <script>
-import SystemInformation from "./LandingPage/SystemInformation";
+import Tags from "./LandingPage/Tags";
 import { debug } from "util";
 import { defaultCoreCipherList, defaultCipherList } from "constants";
 import { desktopCapturer } from "electron";
 import path from "path";
+import { setInterval, clearInterval } from "timers";
 const fs = require("fs");
 
 var videoPlayer = document.createElement("video");
 videoPlayer.autoplay = true;
 videoPlayer.className = "videoPreviewEl";
 videoPlayer.loop = true;
+var timer = null;
 
 // 不允许创建,编辑的key
 // _id 数据库自动创建的唯一id
@@ -73,7 +82,7 @@ videoPlayer.loop = true;
 let disableKeys = ["_id", "icon", "imgs", "description", "add_time"];
 export default {
   name: "landing-page",
-  components: { SystemInformation },
+  components: { Tags },
   data: function() {
     return {
       videos: [],
@@ -259,16 +268,37 @@ export default {
         },
         function(img, secs, event) {
           if (event.type == "seeked") {
+            // console.log(duration)
             let box = document.getElementById(item._id + "_imgBox");
-            img.addEventListener("mouseenter", function() {
+            img.addEventListener("mouseover", function() {
+              let average = duration / 5;
+              let currentPlay = 0;
               videoPlayer.poster = img.src;
               videoPlayer.src = item.path;
+              videoPlayer.muted = true;
+              videoPlayer.height = 100;
               box.appendChild(videoPlayer);
+              timer = window.setInterval(function() {
+                currentPlay += average;
+                if (currentPlay >= duration) {
+                  currentPlay = 0;
+                }
+                console.log(currentPlay, videoPlayer.currentTime);
+                if (currentPlay > videoPlayer.currentTime) {
+                  videoPlayer.currentTime = currentPlay;
+                }
+              }, 2000);
             });
             img.addEventListener("mouseleave", function() {
-              // box.removeChild(videoPlayer);
+              console.log("mouseleave");
+              window.clearInterval(timer);
+              timer = null;
+              box.removeChild(videoPlayer);
             });
-            box.appendChild(img);
+            if (box.childNodes.length == 0) {
+              box.appendChild(img);
+            }
+
             // var li = document.createElement("li");
             // li.innerHTML += "<b>Frame at second " + secs + ":</b><br />";
             // li.appendChild(img);
@@ -424,6 +454,7 @@ main > div {
   top: 0;
   width: 100%;
   z-index: 0;
+  pointer-events: none;
 }
 .welcome {
   color: #555;
